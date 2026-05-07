@@ -217,7 +217,8 @@ public:
             state.q,
             state.dq,
             state.ddq,
-            state.tau_est,
+            state.tau_est
+          	);
     }
 
 private:
