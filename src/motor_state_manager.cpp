@@ -4,36 +4,6 @@
 
 namespace booster_motion
 {
-namespace
-{
-
-constexpr std::array<b1::JointIndex, b1::kJointCnt> kJointMap = {
-  b1::JointIndex::kHeadYaw,
-  b1::JointIndex::kHeadPitch,
-  b1::JointIndex::kLeftShoulderPitch,
-  b1::JointIndex::kLeftShoulderRoll,
-  b1::JointIndex::kLeftElbowPitch,
-  b1::JointIndex::kLeftElbowYaw,
-  b1::JointIndex::kRightShoulderPitch,
-  b1::JointIndex::kRightShoulderRoll,
-  b1::JointIndex::kRightElbowPitch,
-  b1::JointIndex::kRightElbowYaw,
-  b1::JointIndex::kWaist,
-  b1::JointIndex::kLeftHipPitch,
-  b1::JointIndex::kLeftHipRoll,
-  b1::JointIndex::kLeftHipYaw,
-  b1::JointIndex::kLeftKneePitch,
-  b1::JointIndex::kCrankUpLeft,
-  b1::JointIndex::kCrankDownLeft,
-  b1::JointIndex::kRightHipPitch,
-  b1::JointIndex::kRightHipRoll,
-  b1::JointIndex::kRightHipYaw,
-  b1::JointIndex::kRightKneePitch,
-  b1::JointIndex::kCrankUpRight,
-  b1::JointIndex::kCrankDownRight,
-};
-
-}  // namespace
 
 std::string_view joint_name(b1::JointIndex joint)
 {
@@ -98,7 +68,7 @@ MotorStateManager::MotorStateManager()
 : Node("motor_state_manager")
 {
   for (std::size_t i = 0; i < motor_state.size(); ++i) {
-    motor_state[i].joint = kJointMap[i];
+    motor_state[i].joint = kAllJoints[i];
   }
 
   motor_state_subscriber = this->create_subscription<booster_interface::msg::LowState>(
@@ -107,6 +77,8 @@ MotorStateManager::MotorStateManager()
     [this](booster_interface::msg::LowState::SharedPtr msg) {
       this->update_current_motor(msg);
     });
+
+  motor_cmd_publisher = create_publisher<booster_interface::msg::LowCmd>("/joint_ctrl", 10);
 }
 
 void MotorStateManager::update_current_motor(
@@ -129,7 +101,7 @@ void MotorStateManager::update_current_motor(
     const auto & src = serial_states[i];
     auto & dst = motor_state[i];
 
-    dst.joint = kJointMap[i];
+    dst.joint = kAllJoints[i];
     dst.valid = true;
     dst.mode = src.mode;
     dst.q = src.q;
@@ -181,9 +153,70 @@ void MotorStateManager::print_motor_info(b1::JointIndex joint)
 
 void MotorStateManager::print_all_motor_info()
 {
-  for (const auto joint : kJointMap) {
+  for (const auto joint : kAllJoints) {
     print_motor_info(joint);
   }
+}
+
+void MotorStateManager::publish_joint_cmd(booster_interface::msg::LowCmd cmd)
+{
+
+}
+
+void MotorStateManager::disable_torque(const std::vector<b1::JointIndex> & joints)
+{
+  booster_interface::msg::LowCmd cmd;
+    cmd.cmd_type = booster_interface::msg::LowCmd::CMD_TYPE_SERIAL;
+    cmd.motor_cmd.resize(b1::kJointCnt);
+
+    std::array<CurrentMotorState, b1::kJointCnt> state;
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      state = motor_state;
+    }
+
+    for (const auto joint : kAllJoints) {
+      const auto index = joint_to_index(joint);
+      if (!state[index].valid) {
+        RCLCPP_WARN(
+          get_logger(),
+          "No motor state for joint %d (%.*s), skipping disable_torque.",
+          static_cast<int>(joint),
+          static_cast<int>(joint_name(joint).size()),
+          joint_name(joint).data());
+        return;
+      }
+
+      auto & motor = cmd.motor_cmd[index];
+      motor.mode = 0x0A;
+      motor.q = state[index].q;
+      motor.dq = 0.0f;
+      motor.tau = 0.0f;
+      motor.kp = 0.0f;
+      motor.kd = 0.0f;
+      motor.weight = 0.0f;
+    }
+
+    for (const auto joint : joints) {
+      const auto index = joint_to_index(joint);
+      if (index >= cmd.motor_cmd.size()) {
+        RCLCPP_WARN(
+          get_logger(),
+          "Invalid joint index %d in disable_torque.",
+          static_cast<int>(joint));
+        continue;
+      }
+
+      auto & motor = cmd.motor_cmd[index];
+      motor.q = state[index].q;
+      motor.dq = 0.0f;
+      motor.tau = 0.0f;
+      motor.kp = 0.0f;
+      motor.kd = 0.0f;
+      motor.weight = 1.0f;
+    }
+
+    publish_motor_cmd(cmd);
 }
 
 }  // namespace booster_motion

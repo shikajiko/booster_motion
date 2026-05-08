@@ -3,16 +3,16 @@
 #include <array>
 #include <cstdint>
 #include <mutex>
-#include <string_view>
+#include <vector>
 
-#include "booster/robot/b1/b1_api_const.hpp"
+#include "booster_motion/joint_maps.hpp"
 #include "booster_interface/msg/low_state.hpp"
+#include "booster_interface/msg/low_cmd.hpp"
+#include "booster_interface/msg/motor_cmd.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 namespace booster_motion
 {
-
-namespace b1 = booster::robot::b1;
 
 struct CurrentMotorState
 {
@@ -28,9 +28,6 @@ struct CurrentMotorState
   std::array<uint32_t, 2> reserve{0, 0};
 };
 
-std::string_view joint_name(b1::JointIndex joint);
-std::size_t joint_to_index(b1::JointIndex joint);
-
 class MotorStateManager : public rclcpp::Node
 {
 public:
@@ -40,11 +37,17 @@ public:
   bool get_motor_state(b1::JointIndex joint, CurrentMotorState & state) const;
   void print_motor_info(b1::JointIndex joint);
   void print_all_motor_info();
+  void disable_torque(b1::JointIndex joint);
+  void disable_arm_torque();
+  void disable_all_torque();
+  void publish_motor_cmd(const booster_interface::msg::LowCmd & cmd);
 
 private:
   mutable std::mutex mutex;
   std::array<CurrentMotorState, b1::kJointCnt> motor_state;
+  rclcpp::Publisher<booster_interface::msg::LowCmd>::SharedPtr motor_cmd_publisher;
   rclcpp::Subscription<booster_interface::msg::LowState>::SharedPtr motor_state_subscriber;
+  void disable_torque(const std::vector<b1::JointIndex> & joints);
 };
 
 }  // namespace booster_motion

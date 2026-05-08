@@ -6,6 +6,7 @@
 
 #include "booster_interface/srv/rpc_service.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "booster_motion/motor_state_manager.hpp"
 
 namespace booster_motion
 {
@@ -13,7 +14,7 @@ namespace booster_motion
 class RpcClient : public rclcpp::Node
 {
 public:
-  explicit RpcClient();
+  explicit RpcClient(MotorStateManager &motor_state_manager);
 
   bool enable_upper_body_control(
     std::chrono::milliseconds service_timeout = std::chrono::milliseconds(5000),

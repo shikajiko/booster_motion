@@ -3,13 +3,9 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
-#include <thread>
 
 #include "booster_motion/motor_state_manager.hpp"
 #include "rclcpp/rclcpp.hpp"
-
-namespace
-{
 
 bool parse_joint_index(const char * input, int & joint_index)
 {
@@ -29,30 +25,18 @@ bool parse_joint_index(const char * input, int & joint_index)
   return true;
 }
 
-}  // namespace
-
 int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
   const auto logger = rclcpp::get_logger("read_joints");
 
   auto motor_state_manager = std::make_shared<booster_motion::MotorStateManager>();
-  rclcpp::executors::SingleThreadedExecutor executor;
-  executor.add_node(motor_state_manager);
-
-  std::thread spin_thread([&executor]() {
-    executor.spin();
-  });
 
   bool print_all = true;
   booster_motion::b1::JointIndex joint = booster_motion::b1::JointIndex::kHeadYaw;
 
   if (argc > 2) {
     RCLCPP_ERROR(logger, "Usage: read_joints [joint_index]");
-    executor.cancel();
-    if (spin_thread.joinable()) {
-      spin_thread.join();
-    }
     rclcpp::shutdown();
     return 1;
   }
@@ -65,10 +49,6 @@ int main(int argc, char * argv[])
         "Invalid joint index '%s'. Valid range is 0 to %zu.",
         argv[1],
         booster_motion::b1::kJointCnt - 1);
-      executor.cancel();
-      if (spin_thread.joinable()) {
-        spin_thread.join();
-      }
       rclcpp::shutdown();
       return 1;
     }
@@ -85,21 +65,17 @@ int main(int argc, char * argv[])
     RCLCPP_INFO(logger, "Printing all joints.");
   }
 
-  while (rclcpp::ok()) {
-    if (print_all) {
-      motor_state_manager->print_all_motor_info();
-    } else {
-      motor_state_manager->print_motor_info(joint);
-    }
+  auto timer = motor_state_manager->create_wall_timer(
+    std::chrono::seconds(1),
+    [motor_state_manager, print_all, joint]() {
+      if (print_all) {
+        motor_state_manager->print_all_motor_info();
+      } else {
+        motor_state_manager->print_motor_info(joint);
+      }
+    });
 
-    std::this_thread::sleep_for(std::chrono::seconds(1));
-  }
-
-  executor.cancel();
-  if (spin_thread.joinable()) {
-    spin_thread.join();
-  }
-
+  rclcpp::spin(motor_state_manager);
   rclcpp::shutdown();
   return 0;
 }

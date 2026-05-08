@@ -4,9 +4,10 @@
 namespace booster_motion
 {
 
-RpcClient::RpcClient()
+RpcClient::RpcClient(MotorStateManager &motor_state_manager)
 : Node("rpc_client")
 {
+  (void)motor_state_manager;
   service_name = "booster_rpc_service";
   client = this->create_client<RpcService>(service_name);
 }

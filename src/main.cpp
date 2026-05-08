@@ -12,7 +12,7 @@ int main(int argc, char * argv[])
   const auto logger = rclcpp::get_logger("booster_motion");
 
   auto motor_state_manager = std::make_shared<booster_motion::MotorStateManager>();
-  auto rpc_client = std::make_shared<booster_motion::RpcClient>();
+  auto rpc_client = std::make_shared<booster_motion::RpcClient>(*motor_state_manager);
 
   rclcpp::executors::MultiThreadedExecutor executor;
   executor.add_node(motor_state_manager);
