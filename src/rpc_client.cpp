@@ -1,97 +1,72 @@
-#include "booster_interface/srv/rpc_service.hpp"
+#include "booster_motion/rpc_client.hpp"
 #include "booster_interface/message_utils.hpp"
-#include "booster_interface/msg/booster_api_req_msg.hpp"
-#include "rclcpp/rclcpp.hpp"
 
-#include <chrono>
-#include <cstdlib>
-#include <memory>
-#include <thread>
-
-using namespace std::chrono_literals;
-
-class RpcClient :  public rclcpp::Node
+namespace booster_motion
 {
-public:
-    RpcClient() : Node("rpc_client"){
 
-    }
-    void enable_upper_body_control();
-    void disable_upper_body_control();
-
-private:
-    rclcpp::Client<booster_interface::srv::RpcService>::SharedPtr client;
-    auto request = std::make_shared<booster_interface::srv::RpcService::Request>();
-    auto req_enable_upper_body_control = booster_interface::CreateMsg<
-        booster::robot::b1::LocoApiId::kUpperBodyCustomControl,
-        booster::robot::b1::UpperBodyCustomControlParameter>(true);
-    >
-    auto req_disable_upper_body_control = booster_interface::CreateMsg<
-        booster::robot::b1::LocoApiId::kUpperBodyCustomControl,
-        booster::robot::b1::UpperBodyCustomControlParameter>(false);
-    >
-        
-}
-void RpcClient::enable_upper_body_control(){
-    while (!client->wait_for_service(1s)){
-        if (!rclcpp::ok()) {
-            RCLCPP_ERROR(rclcpp::get_logger("rclcpp"),
-                         "Interrupted while waiting for the service. Exiting.");
-            return 0;
-        }
-        RCLCPP_INFO(rclcpp::get_logger("rclcpp"),
-                    "service not available, waiting again...");
-    }
-    auto future = rpc_client_->async_send_request(req_enable_upper_body_control);
-    auto result = rclcpp::spin_until_future_complete(
-        this->shared_from_this(),
-        future,
-        3s 
-    );
-
-    if (result != rclcpp::FutureReturnCode::SUCCESS) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to enable UpperBodyCustomControl");
-        return false;
-    }
-
-    auto response = future.get();
-    RCLCPP_INFO(
-        this->get_logger(),
-        "UpperBodyCustomControl response: status=%ld body=%s",
-        response->msg.status,
-        response->msg.body.c_str());
-
-    return response->msg.status == 0;
+RpcClient::RpcClient()
+: Node("rpc_client")
+{
+  service_name = "booster_rpc_service";
+  client = this->create_client<RpcService>(service_name);
 }
 
-void RpcClient::disable_upper_body_control(){
-     while (!client->wait_for_service(1s)){
-        if (!rclcpp::ok()) {
-            RCLCPP_ERROR(rclcpp::get_logger("rclcpp"),
-                         "Interrupted while waiting for the service. Exiting.");
-            return 0;
-        }
-        RCLCPP_INFO(rclcpp::get_logger("rclcpp"),
-                    "service not available, waiting again...");
-    }
-    auto future = rpc_client_->async_send_request(req_enable_disable_body_control);
-    auto result = rclcpp::spin_until_future_complete(
-        this->shared_from_this(),
-        future,
-        3s 
-    );
-
-    if (result != rclcpp::FutureReturnCode::SUCCESS) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to enable UpperBodyCustomControl");
-        return false;
-    }
-
-    auto response = future.get();
-    RCLCPP_INFO(
-        this->get_logger(),
-        "UpperBodyCustomControl response: status=%ld body=%s",
-        response->msg.status,
-        response->msg.body.c_str());
-
-    return response->msg.status == 0;
+bool RpcClient::enable_upper_body_control(
+  std::chrono::milliseconds service_timeout,
+  std::chrono::milliseconds response_timeout)
+{
+  return set_upper_body_custom_control(true, service_timeout, response_timeout);
 }
+
+bool RpcClient::disable_upper_body_control(
+  std::chrono::milliseconds service_timeout,
+  std::chrono::milliseconds response_timeout)
+{
+  return set_upper_body_custom_control(false, service_timeout, response_timeout);
+}
+
+bool RpcClient::set_upper_body_custom_control(
+  bool is_enable,
+  std::chrono::milliseconds service_timeout,
+  std::chrono::milliseconds response_timeout)
+{
+  if (!client->wait_for_service(service_timeout)) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "RPC service '%s' is not available.",
+      service_name.c_str());
+    return false;
+  }
+
+  auto future = client->async_send_request(make_upper_body_request(is_enable));
+  const auto status = future.wait_for(response_timeout);
+
+  if (status != std::future_status::ready) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "UpperBodyCustomControl(%s) RPC did not complete.",
+      is_enable ? "true" : "false");
+    return false;
+  }
+
+  const auto response = future.get();
+  RCLCPP_INFO(
+    get_logger(),
+    "UpperBodyCustomControl(%s) response: status=%ld body=%s",
+    is_enable ? "true" : "false",
+    response->msg.status,
+    response->msg.body.c_str());
+
+  return response->msg.status == 0;
+}
+
+std::shared_ptr<RpcClient::RpcService::Request> RpcClient::make_upper_body_request(bool is_enable) const
+{
+  auto request = std::make_shared<RpcService::Request>();
+  request->msg = booster_interface::CreateMsg<
+    booster::robot::b1::LocoApiId::kUpperBodyCustomControl,
+    booster::robot::b1::UpperBodyCustomControlParameter>(is_enable);
+  return request;
+}
+
+}  // namespace booster_motion
