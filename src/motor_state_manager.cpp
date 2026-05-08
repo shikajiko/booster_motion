@@ -9,7 +9,9 @@
 
 #include "booster/robot/b1/b1_api_const.hpp"
 #include "booster_interface/msg/low_state.hpp"
+#include "booster_interface/msg/low_cmd.hpp"
 #include "rclcpp/rclcpp.hpp"
+
 
 namespace b1 = booster::robot::b1;
 
@@ -133,25 +135,6 @@ public:
             });
     }
 
-    void run_command_loop()
-    {
-        RCLCPP_INFO(get_logger(), "Enter a Booster joint id from 0 to %zu, or 99 to exit.", b1::kJointCnt - 1);
-        int cmd = 0;
-        while (rclcpp::ok() && std::cin >> cmd) {
-            if (cmd == 99) {
-                RCLCPP_INFO(get_logger(), "Stopping motor state manager.");
-                break;
-            }
-            
-            if (cmd < 0 || cmd >= static_cast<int>(kJointMap.size())) {
-                RCLCPP_WARN(get_logger(), "Invalid joint id %d. Valid range is 0 to %zu, or 99 to exit.", cmd, b1::kJointCnt - 1);
-                continue;
-            }
-
-            print_motor_info(kJointMap[static_cast<std::size_t>(cmd)]);
-        }
-    }
-
     void update_current_motor(const booster_interface::msg::LowState::SharedPtr &msg)
     {
         const auto &serial_states = msg->motor_state_serial;
@@ -186,12 +169,6 @@ public:
 
     void print_motor_info(b1::JointIndex joint)
     {
-        const std::size_t index = joint_to_index(joint);
-        if (index >= motor_state_.size()) {
-            RCLCPP_WARN(get_logger(), "Joint %d is outside the B1 joint map.", static_cast<int>(joint));
-            return;
-        }
-
         CurrentMotorState state;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -230,22 +207,8 @@ private:
 int main(int argc, char *argv[])
 {
     rclcpp::init(argc, argv);
-
     auto node = std::make_shared<MotorStateManager>();
-    rclcpp::executors::SingleThreadedExecutor executor;
-    executor.add_node(node);
-
-    std::thread spin_thread([&executor]() {
-        executor.spin();
-    });
-
-    node->run_command_loop();
-    executor.cancel();
-
-    if (spin_thread.joinable()) {
-        spin_thread.join();
-    }
-
+    rclcpp::spin(node);
     rclcpp::shutdown();
 
     return 0;
