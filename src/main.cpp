@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -14,6 +15,7 @@
 #include "booster_client_interface/srv/set_mode.hpp"
 #include "booster_interface/msg/low_state.hpp"
 #include "booster_joint_interface/msg/set_joints.hpp"
+#include "booster_joint_interface/msg/set_torques.hpp"
 #include "booster_joint_interface/msg/transition_command.hpp"
 #include "rclcpp/rclcpp.hpp"
 
@@ -23,10 +25,12 @@ namespace
 using SetMode = booster_client_interface::srv::SetMode;
 using LowState = booster_interface::msg::LowState;
 using SetJoints = booster_joint_interface::msg::SetJoints;
+using SetTorques = booster_joint_interface::msg::SetTorques;
 using TransitionCommand = booster_joint_interface::msg::TransitionCommand;
 
 constexpr uint8_t kLeftShoulderPitchId = 2;
 constexpr uint8_t kRightShoulderPitchId = 6;
+constexpr std::array<uint8_t, 8> kArmJointIds = {2, 3, 4, 5, 6, 7, 8, 9};
 constexpr float kShoulderStepRad = 20.0F * 3.14159265358979323846F / 180.0F;
 constexpr float kVelocityScale = 1.0F;
 
@@ -119,6 +123,7 @@ public:
   {
     mode_client_ = create_client<SetMode>("client/set_mode");
     joint_publisher_ = create_publisher<SetJoints>("joint/set_joints", 10);
+    torque_publisher_ = create_publisher<SetTorques>("joint/set_torques", 10);
     joint_state_subscriber_ = create_subscription<LowState>(
       "joint/joint_states",
       10,
@@ -154,6 +159,7 @@ private:
       << "  ard                           Right shoulder pitch -20 deg, velocity scale 1\n"
       << "  alu                           Left shoulder pitch +20 deg, velocity scale 1\n"
       << "  ald                           Left shoulder pitch -20 deg, velocity scale 1\n"
+      << "  arms off                      Disable torque for all arm joints\n"
       << "  help                          Print this command list\n"
       << "  quit                          Exit\n\n";
   }
@@ -218,6 +224,18 @@ private:
       return;
     }
 
+    if ((head == "arms" || head == "arm") && words.size() == 2 && to_lower(words[1]) == "off") {
+      publish_arm_torque(false);
+      return;
+    }
+
+    if ((head == "arms" || head == "arm") && words.size() == 3 &&
+      to_lower(words[1]) == "torque" && to_lower(words[2]) == "off")
+    {
+      publish_arm_torque(false);
+      return;
+    }
+
     RCLCPP_WARN(get_logger(), "Unknown command: '%s'", command.c_str());
   }
 
@@ -274,6 +292,20 @@ private:
       joint.velocity);
   }
 
+  void publish_arm_torque(bool enable_torque)
+  {
+    SetTorques msg;
+    msg.ids.assign(kArmJointIds.begin(), kArmJointIds.end());
+    msg.torque_enable = enable_torque;
+
+    torque_publisher_->publish(msg);
+    RCLCPP_INFO(
+      get_logger(),
+      "Published arm torque %s command for %zu joints",
+      enable_torque ? "enable" : "disable",
+      msg.ids.size());
+  }
+
   std::optional<float> get_current_joint_position(uint8_t joint_id) const
   {
     std::lock_guard<std::mutex> lock(low_state_mutex_);
@@ -291,6 +323,7 @@ private:
 
   rclcpp::Client<SetMode>::SharedPtr mode_client_;
   rclcpp::Publisher<SetJoints>::SharedPtr joint_publisher_;
+  rclcpp::Publisher<SetTorques>::SharedPtr torque_publisher_;
   rclcpp::Subscription<LowState>::SharedPtr joint_state_subscriber_;
 
   mutable std::mutex low_state_mutex_;
