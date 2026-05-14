@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "booster_client_interface/srv/set_mode.hpp"
+#include "booster_client_interface/srv/set_upper_control.hpp"
 #include "booster_interface/msg/low_state.hpp"
 #include "booster_joint_interface/msg/set_joints.hpp"
 #include "booster_joint_interface/msg/set_torques.hpp"
@@ -27,6 +28,7 @@ using LowState = booster_interface::msg::LowState;
 using SetJoints = booster_joint_interface::msg::SetJoints;
 using SetTorques = booster_joint_interface::msg::SetTorques;
 using TransitionCommand = booster_joint_interface::msg::TransitionCommand;
+using SetUpperControl = booster_client_interface::srv::SetUpperControl;
 
 constexpr uint8_t kLeftShoulderPitchId = 2;
 constexpr uint8_t kRightShoulderPitchId = 6;
@@ -122,6 +124,7 @@ public:
   : rclcpp::Node("booster_motion_terminal")
   {
     mode_client_ = create_client<SetMode>("client/set_mode");
+    upper_control_client = create_client<SetUpperControl>("client/set_upper_control");
     joint_publisher_ = create_publisher<SetJoints>("joint/set_joints", 10);
     torque_publisher_ = create_publisher<SetTorques>("joint/set_torques", 10);
     joint_state_subscriber_ = create_subscription<LowState>(
@@ -161,7 +164,9 @@ private:
       << "  ald                           Left shoulder pitch -20 deg, velocity scale 1\n"
       << "  arms off                      Disable torque for all arm joints\n"
       << "  arms on                       Enable torque for all arm joints\n"
-      << "  help                          Print this command list\n"
+      << "  upc on                        Enable upper body custom control\n"
+      << "  upc off                       Disable upper body custom control\n"
+      << "  help                          Print this command list\n" 
       << "  quit                          Exit\n\n";
   }
 
@@ -249,6 +254,19 @@ private:
       return;
     }
 
+    if ((head == "upc") && words.size() == 2 && to_lower(words[1]) == "on") {
+      send_upper_control(true);
+      return;
+    }
+
+    if ((head == "upc") && words.size() == 2 && to_lower(words[1]) == "off") {
+      send_upper_control(false);
+      return;
+    }
+
+
+    
+
     RCLCPP_WARN(get_logger(), "Unknown command: '%s'", command.c_str());
   }
 
@@ -273,6 +291,31 @@ private:
           RCLCPP_INFO(get_logger(), "Mode change accepted: %s (%u)", mode_name(mode), mode);
         } else {
           RCLCPP_WARN(get_logger(), "Mode change failed: %s (%u)", mode_name(mode), mode);
+        }
+      });
+  }
+
+  void send_upper_control(bool enable)
+  {
+    if (!upper_control_client->service_is_ready()) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Service 'client/set_upper_control' is not ready. Start booster_client/rpc_client_node first.");
+      return;
+    }
+
+    auto request = std::make_shared<SetUpperControl::Request>();
+    request->enable = enable;
+
+    RCLCPP_INFO(get_logger(), "Requesting upc change");
+    mode_client_->async_send_request(
+      request,
+      [this, mode](rclcpp::Client<SetUpperControl>::SharedFuture future) {
+        const auto response = future.get();
+        if (response->success) {
+          RCLCPP_INFO(get_logger(), "UPC change success");
+        } else {
+          RCLCPP_WARN(get_logger(), "UPC change failed");
         }
       });
   }
