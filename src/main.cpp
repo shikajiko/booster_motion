@@ -1,64 +1,324 @@
-#include <memory>
+#include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <chrono>
+#include <cstdint>
+#include <iostream>
+#include <mutex>
+#include <optional>
+#include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
-#include "booster_motion/motor_state_manager.hpp"
-#include "booster_motion/rpc_client.hpp"
+#include "booster_client_interface/srv/set_mode.hpp"
+#include "booster_interface/msg/low_state.hpp"
+#include "booster_joint_interface/msg/set_joints.hpp"
+#include "booster_joint_interface/msg/transition_command.hpp"
 #include "rclcpp/rclcpp.hpp"
+
+namespace
+{
+
+using SetMode = booster_client_interface::srv::SetMode;
+using LowState = booster_interface::msg::LowState;
+using SetJoints = booster_joint_interface::msg::SetJoints;
+using TransitionCommand = booster_joint_interface::msg::TransitionCommand;
+
+constexpr uint8_t kLeftShoulderPitchId = 2;
+constexpr uint8_t kRightShoulderPitchId = 6;
+constexpr float kShoulderStepRad = 20.0F * 3.14159265358979323846F / 180.0F;
+constexpr float kVelocityScale = 1.0F;
+
+std::string trim(const std::string & input)
+{
+  const auto first = std::find_if_not(
+    input.begin(),
+    input.end(),
+    [](unsigned char c) { return std::isspace(c) != 0; });
+
+  const auto last = std::find_if_not(
+    input.rbegin(),
+    input.rend(),
+    [](unsigned char c) { return std::isspace(c) != 0; }).base();
+
+  if (first >= last) {
+    return {};
+  }
+
+  return std::string(first, last);
+}
+
+std::string to_lower(std::string input)
+{
+  std::transform(
+    input.begin(),
+    input.end(),
+    input.begin(),
+    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return input;
+}
+
+std::vector<std::string> split_words(const std::string & input)
+{
+  std::istringstream stream(input);
+  std::vector<std::string> words;
+  std::string word;
+
+  while (stream >> word) {
+    words.push_back(word);
+  }
+
+  return words;
+}
+
+std::optional<uint8_t> parse_mode(const std::string & input)
+{
+  const auto mode = to_lower(input);
+
+  if (mode == "0" || mode == "damp" || mode == "damping") {
+    return TransitionCommand::MODE_DAMPING;
+  }
+
+  if (mode == "1" || mode == "stand" || mode == "prepare") {
+    return TransitionCommand::MODE_STAND;
+  }
+
+  if (mode == "2" || mode == "walk" || mode == "walking") {
+    return TransitionCommand::MODE_WALK;
+  }
+
+  if (mode == "3" || mode == "custom") {
+    return TransitionCommand::MODE_CUSTOM;
+  }
+
+  return std::nullopt;
+}
+
+const char * mode_name(uint8_t mode)
+{
+  switch (mode) {
+    case TransitionCommand::MODE_DAMPING:
+      return "damping";
+    case TransitionCommand::MODE_STAND:
+      return "stand";
+    case TransitionCommand::MODE_WALK:
+      return "walk";
+    case TransitionCommand::MODE_CUSTOM:
+      return "custom";
+    default:
+      return "unknown";
+  }
+}
+
+class BoosterMotionTerminal : public rclcpp::Node
+{
+public:
+  BoosterMotionTerminal()
+  : rclcpp::Node("booster_motion_terminal")
+  {
+    mode_client_ = create_client<SetMode>("client/set_mode");
+    joint_publisher_ = create_publisher<SetJoints>("joint/set_joints", 10);
+    joint_state_subscriber_ = create_subscription<LowState>(
+      "joint/joint_states",
+      10,
+      [this](const LowState::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(low_state_mutex_);
+        latest_low_state_ = *msg;
+      });
+  }
+
+  void run_terminal()
+  {
+    print_help();
+
+    std::string line;
+    while (rclcpp::ok() && !stop_requested_) {
+      std::cout << "booster_motion> " << std::flush;
+      if (!std::getline(std::cin, line)) {
+        break;
+      }
+
+      handle_command(trim(line));
+    }
+  }
+
+private:
+  void print_help() const
+  {
+    std::cout
+      << "\nCommands:\n"
+      << "  mode damp|stand|walk|custom   Change robot mode through client/set_mode\n"
+      << "  damp|stand|walk|custom        Same as mode <name>\n"
+      << "  aru                           Right shoulder pitch +20 deg, velocity scale 1\n"
+      << "  ard                           Right shoulder pitch -20 deg, velocity scale 1\n"
+      << "  alu                           Left shoulder pitch +20 deg, velocity scale 1\n"
+      << "  ald                           Left shoulder pitch -20 deg, velocity scale 1\n"
+      << "  help                          Print this command list\n"
+      << "  quit                          Exit\n\n";
+  }
+
+  void handle_command(const std::string & command)
+  {
+    if (command.empty()) {
+      return;
+    }
+
+    const auto words = split_words(command);
+    const auto head = to_lower(words.front());
+
+    if (head == "help" || head == "h" || head == "?") {
+      print_help();
+      return;
+    }
+
+    if (head == "quit" || head == "exit" || head == "q") {
+      stop_requested_ = true;
+      return;
+    }
+
+    if (head == "mode" || head == "m") {
+      if (words.size() != 2) {
+        RCLCPP_WARN(get_logger(), "Usage: mode damp|stand|walk|custom");
+        return;
+      }
+
+      const auto mode = parse_mode(words[1]);
+      if (!mode.has_value()) {
+        RCLCPP_WARN(get_logger(), "Unknown mode: '%s'", words[1].c_str());
+        return;
+      }
+
+      send_mode_request(*mode);
+      return;
+    }
+
+    if (const auto mode = parse_mode(head); mode.has_value()) {
+      send_mode_request(*mode);
+      return;
+    }
+
+    if (head == "aru") {
+      publish_shoulder_delta(kRightShoulderPitchId, kShoulderStepRad, "right shoulder up");
+      return;
+    }
+
+    if (head == "ard") {
+      publish_shoulder_delta(kRightShoulderPitchId, -kShoulderStepRad, "right shoulder down");
+      return;
+    }
+
+    if (head == "alu") {
+      publish_shoulder_delta(kLeftShoulderPitchId, kShoulderStepRad, "left shoulder up");
+      return;
+    }
+
+    if (head == "ald") {
+      publish_shoulder_delta(kLeftShoulderPitchId, -kShoulderStepRad, "left shoulder down");
+      return;
+    }
+
+    RCLCPP_WARN(get_logger(), "Unknown command: '%s'", command.c_str());
+  }
+
+  void send_mode_request(uint8_t mode)
+  {
+    if (!mode_client_->service_is_ready()) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Mode service 'client/set_mode' is not ready. Start booster_client/rpc_client_node first.");
+      return;
+    }
+
+    auto request = std::make_shared<SetMode::Request>();
+    request->mode = mode;
+
+    RCLCPP_INFO(get_logger(), "Requesting mode change: %s (%u)", mode_name(mode), mode);
+    mode_client_->async_send_request(
+      request,
+      [this, mode](rclcpp::Client<SetMode>::SharedFuture future) {
+        const auto response = future.get();
+        if (response->success) {
+          RCLCPP_INFO(get_logger(), "Mode change accepted: %s (%u)", mode_name(mode), mode);
+        } else {
+          RCLCPP_WARN(get_logger(), "Mode change failed: %s (%u)", mode_name(mode), mode);
+        }
+      });
+  }
+
+  void publish_shoulder_delta(uint8_t joint_id, float delta, const char * label)
+  {
+    const auto current_position = get_current_joint_position(joint_id);
+    if (!current_position.has_value()) {
+      RCLCPP_WARN(
+        get_logger(),
+        "No joint state for joint id %u yet. Start booster_joint_manager and wait for joint/joint_states.",
+        joint_id);
+      return;
+    }
+
+    SetJoints msg;
+    auto & joint = msg.joints.emplace_back();
+    joint.id = joint_id;
+    joint.position = *current_position + delta;
+    joint.velocity = kVelocityScale;
+
+    joint_publisher_->publish(msg);
+    RCLCPP_INFO(
+      get_logger(),
+      "Published %s command: joint=%u current=%.4f target=%.4f velocity_scale=%.2f",
+      label,
+      joint_id,
+      *current_position,
+      joint.position,
+      joint.velocity);
+  }
+
+  std::optional<float> get_current_joint_position(uint8_t joint_id) const
+  {
+    std::lock_guard<std::mutex> lock(low_state_mutex_);
+    if (!latest_low_state_.has_value()) {
+      return std::nullopt;
+    }
+
+    const auto index = static_cast<std::size_t>(joint_id);
+    if (index >= latest_low_state_->motor_state_serial.size()) {
+      return std::nullopt;
+    }
+
+    return latest_low_state_->motor_state_serial[index].q;
+  }
+
+  rclcpp::Client<SetMode>::SharedPtr mode_client_;
+  rclcpp::Publisher<SetJoints>::SharedPtr joint_publisher_;
+  rclcpp::Subscription<LowState>::SharedPtr joint_state_subscriber_;
+
+  mutable std::mutex low_state_mutex_;
+  std::optional<LowState> latest_low_state_;
+  std::atomic_bool stop_requested_{false};
+};
+
+}  // namespace
 
 int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
-  const auto logger = rclcpp::get_logger("booster_motion");
 
-  auto motor_state_manager = std::make_shared<booster_motion::MotorStateManager>();
-  auto rpc_client = std::make_shared<booster_motion::RpcClient>(*motor_state_manager);
-
-  rclcpp::executors::MultiThreadedExecutor executor;
-  executor.add_node(motor_state_manager);
-  executor.add_node(rpc_client);
-
-  RCLCPP_INFO(
-    logger,
-    "Running motor_state_manager and rpc_client nodes.");
+  auto terminal = std::make_shared<BoosterMotionTerminal>();
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(terminal);
 
   std::thread spin_thread([&executor]() {
     executor.spin();
   });
 
-  while (rclcpp::ok()) {
-    std::string cmd;
-    std::cin >> cmd;
-
-    if (cmd == "eu") {
-      const bool success = rpc_client->enable_upper_body_control();
-      if (!success) {
-        RCLCPP_ERROR(
-          logger,
-          "enable upper body control command failed");
-      }
-    } else if (cmd == "du") {
-      const bool success = rpc_client->disable_upper_body_control();
-      if (!success) {
-        RCLCPP_ERROR(
-          logger,
-          "disable upper body control command failed");
-      }
-    } else if (cmd == "q" || cmd == "quit" || cmd == "exit") {
-      break;
-    } else {
-      RCLCPP_WARN(
-        logger,
-        "Unknown command '%s'. Use 'eu', 'du', or 'q'.",
-        cmd.c_str());
-    }
-  }
+  terminal->run_terminal();
 
   executor.cancel();
   if (spin_thread.joinable()) {
     spin_thread.join();
   }
-
   rclcpp::shutdown();
+
   return 0;
 }

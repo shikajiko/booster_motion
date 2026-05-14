@@ -9,47 +9,20 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(booster_interface REQUIRED)
-
-add_library(booster_motion_nodes
-  src/motor_state_manager.cpp
-  src/rpc_client.cpp
-)
-target_include_directories(booster_motion_nodes PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../booster_robotics_sdk/include>
-  $<INSTALL_INTERFACE:include>
-)
-ament_target_dependencies(booster_motion_nodes
-  rclcpp
-  booster_interface
-)
+find_package(booster_client_interface REQUIRED)
+find_package(booster_joint_interface REQUIRED)
 
 add_executable(booster_motion src/main.cpp)
-target_link_libraries(booster_motion
-  booster_motion_nodes
-)
 ament_target_dependencies(booster_motion
   rclcpp
-)
-
-add_executable(read_joints src/read_joints.cpp)
-target_link_libraries(read_joints
-  booster_motion_nodes
-)
-ament_target_dependencies(read_joints
-  rclcpp
+  booster_interface
+  booster_client_interface
+  booster_joint_interface
 )
 
 install(TARGETS
   booster_motion
-  read_joints
   RUNTIME DESTINATION lib/${PROJECT_NAME}
-)
-
-install(TARGETS booster_motion_nodes
-  ARCHIVE DESTINATION lib
-  LIBRARY DESTINATION lib
-  RUNTIME DESTINATION bin
 )
 
 install(DIRECTORY include/

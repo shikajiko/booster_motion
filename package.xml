@@ -11,6 +11,8 @@
 
   <depend>rclcpp</depend>
   <depend>booster_interface</depend>
+  <depend>booster_client_interface</depend>
+  <depend>booster_joint_interface</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
