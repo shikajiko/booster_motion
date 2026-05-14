@@ -160,6 +160,7 @@ private:
       << "  alu                           Left shoulder pitch +20 deg, velocity scale 1\n"
       << "  ald                           Left shoulder pitch -20 deg, velocity scale 1\n"
       << "  arms off                      Disable torque for all arm joints\n"
+      << "  arms on                       Enable torque for all arm joints\n"
       << "  help                          Print this command list\n"
       << "  quit                          Exit\n\n";
   }
@@ -233,6 +234,18 @@ private:
       to_lower(words[1]) == "torque" && to_lower(words[2]) == "off")
     {
       publish_arm_torque(false);
+      return;
+    }
+
+    if ((head == "arms" || head == "arm") && words.size() == 2 && to_lower(words[1]) == "on") {
+      publish_arm_torque(true);
+      return;
+    }
+
+    if ((head == "arms" || head == "arm") && words.size() == 3 &&
+      to_lower(words[1]) == "torque" && to_lower(words[2]) == "on")
+    {
+      publish_arm_torque(true);
       return;
     }
 
