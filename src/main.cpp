@@ -124,7 +124,7 @@ public:
   : rclcpp::Node("booster_motion_terminal")
   {
     mode_client_ = create_client<SetMode>("client/set_mode");
-    upper_control_client = create_client<SetUpperControl>("client/set_upper_control");
+    upper_control_client_ = create_client<SetUpperControl>("client/set_upper_control");
     joint_publisher_ = create_publisher<SetJoints>("joint/set_joints", 10);
     torque_publisher_ = create_publisher<SetTorques>("joint/set_torques", 10);
     joint_state_subscriber_ = create_subscription<LowState>(
@@ -166,7 +166,7 @@ private:
       << "  arms on                       Enable torque for all arm joints\n"
       << "  upc on                        Enable upper body custom control\n"
       << "  upc off                       Disable upper body custom control\n"
-      << "  help                          Print this command list\n" 
+      << "  help                          Print this command list\n"
       << "  quit                          Exit\n\n";
   }
 
@@ -264,9 +264,6 @@ private:
       return;
     }
 
-
-    
-
     RCLCPP_WARN(get_logger(), "Unknown command: '%s'", command.c_str());
   }
 
@@ -297,7 +294,7 @@ private:
 
   void send_upper_control(bool enable)
   {
-    if (!upper_control_client->service_is_ready()) {
+    if (!upper_control_client_->service_is_ready()) {
       RCLCPP_WARN(
         get_logger(),
         "Service 'client/set_upper_control' is not ready. Start booster_client/rpc_client_node first.");
@@ -307,15 +304,24 @@ private:
     auto request = std::make_shared<SetUpperControl::Request>();
     request->enable = enable;
 
-    RCLCPP_INFO(get_logger(), "Requesting upc change");
-    mode_client_->async_send_request(
+    RCLCPP_INFO(
+      get_logger(),
+      "Requesting upper body custom control %s",
+      enable ? "enable" : "disable");
+    upper_control_client_->async_send_request(
       request,
-      [this, mode](rclcpp::Client<SetUpperControl>::SharedFuture future) {
+      [this, enable](rclcpp::Client<SetUpperControl>::SharedFuture future) {
         const auto response = future.get();
         if (response->success) {
-          RCLCPP_INFO(get_logger(), "UPC change success");
+          RCLCPP_INFO(
+            get_logger(),
+            "Upper body custom control %s accepted",
+            enable ? "enable" : "disable");
         } else {
-          RCLCPP_WARN(get_logger(), "UPC change failed");
+          RCLCPP_WARN(
+            get_logger(),
+            "Upper body custom control %s failed",
+            enable ? "enable" : "disable");
         }
       });
   }
@@ -378,6 +384,7 @@ private:
   }
 
   rclcpp::Client<SetMode>::SharedPtr mode_client_;
+  rclcpp::Client<SetUpperControl>::SharedPtr upper_control_client_;
   rclcpp::Publisher<SetJoints>::SharedPtr joint_publisher_;
   rclcpp::Publisher<SetTorques>::SharedPtr torque_publisher_;
   rclcpp::Subscription<LowState>::SharedPtr joint_state_subscriber_;
